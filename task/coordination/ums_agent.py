@@ -21,34 +21,52 @@ class UMSAgentGateway:
             request: Request,
             additional_instructions: Optional[str]
     ) -> Message:
-        #TODO:
-        # ⚠️ Important point: we need to provide Agent with conversation history that is related to this particular
-        #    Agent, otherwise it will confuse the Agent.
-        # 1. Get UMS conversation id. UMS Agent is custom implementation that is storing all the conversation on its
-        #    side and without created conversation we are unable to communicate with UMS agent.
-        #    The `ums_conversation_id` with be persisted in some of assistant message state (if conversation was created),
-        #    additionally we will have 1-to-1 relation (one our conversation will have one conversation on the UMS agent side)
-        # 2. If no conversation id found then create new conversation and set it to choice state as dict {_UMS_CONVERSATION_ID: {id}}
-        # 3. Get last message (the last always will be the user message) and make augmentation with additional instructions
-        # 4. Call UMS Agent
-        # 5. return assistant message
-        raise NotImplementedError()
 
+        conversation_id = self.__get_ums_conversation_id(request)
+
+        if not conversation_id:
+            conversation_id = await self.__create_ums_conversation()
+            choice.set_state({_UMS_CONVERSATION_ID: conversation_id})
+
+        last_message: Message = request.messages[-1]
+        user_content = last_message.content
+
+        if not isinstance(user_content, str):
+            raise ValueError("UMS agent expects text user message")
+
+        if additional_instructions:
+            user_content = (
+                f"{user_content}\n\n"
+                f"Additional instructions:\n{additional_instructions}"
+            )
+
+        result_text = await self.__call_ums_agent(
+            conversation_id=conversation_id,
+            user_message=user_content,
+            stage=stage
+        )
+
+        return Message(
+            role=Role.ASSISTANT,
+            content=StrictStr(result_text),
+        )
 
     def __get_ums_conversation_id(self, request: Request) -> Optional[str]:
-        """Extract UMS conversation ID from previous messages if it exists"""
-        #TODO:
-        # Iterate through message history, check if custom content with state is present and if it contains
-        # _UMS_CONVERSATION_ID, if yes then return it, otherwise return None
-        raise NotImplementedError()
+        for message in request.messages:
+            if message.custom_content and isinstance(message.custom_content, dict):
+                state = message.custom_content.get("state")
+                if state and _UMS_CONVERSATION_ID in state:
+                    return state[_UMS_CONVERSATION_ID]
+        return None
 
     async def __create_ums_conversation(self) -> str:
-        """Create a new conversation on UMS agent side"""
-        #TODO:
-        # 1. Create async context manager with httpx.AsyncClient()
-        # 2. Make POST request to create conversation https://github.com/khshanovskyi/ai-dial-ums-ui-agent/blob/completed/agent/app.py#L159
-        # 3. Get response json and return `id` from it
-        raise NotImplementedError()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.ums_agent_endpoint}/conversation"
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["id"]
 
     async def __call_ums_agent(
             self,
@@ -56,23 +74,41 @@ class UMSAgentGateway:
             user_message: str,
             stage: Stage
     ) -> str:
-        """Call UMS agent and stream the response"""
-        #TODO:
-        # 1. Create async context manager with httpx.AsyncClient()
-        # 2. Make POST request to chat https://github.com/khshanovskyi/ai-dial-ums-ui-agent/blob/completed/agent/app.py#L216
-        #    it applies message as request body: {"message": { "role": "user","content": user_message},"stream": True}
-        #    streaming must be enabled
-        # 3. Now is the time to recall the first practice with console chat when we parsed raw streaming responses,
-        #    don't worry, hopefully we made response in openai compatible (the same as in openai spec).
-        #    Make async loop through `response.aiter_lines()` and:
-        #       - Cut the `data: `. The streaming chunks will be returned in such format:
-        #         data: {'choices': [{'delta': {'content': 'chunk 1'}}]}
-        #         data: {'choices': [{'delta': {'content': 'chunk 2'}}]}
-        #         data: {'choices': [{'delta': {'content': 'chunk ...'}}]}
-        #         data: {'choices': [{'delta': {'content': 'chunk n'}}]}
-        #         data: {'conversation_id': '{conversation_id}'}
-        #         data: [DONE]
-        #       - If in result you have [DONE] - that means that streaming is finished an you can break the loop
-        #       - Make dict from json
-        #       - Get content, accumulate it to return after and append content chunks to the stage
-        raise NotImplementedError()
+
+        accumulated_text = ""
+
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                    "POST",
+                    f"{self.ums_agent_endpoint}/chat/{conversation_id}",
+                    json={
+                        "message": {
+                            "role": "user",
+                            "content": user_message
+                        },
+                        "stream": True
+                    }
+            ) as response:
+
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+
+                    if not line.startswith("data:"):
+                        continue
+
+                    data = line.removeprefix("data: ").strip()
+
+                    if data == "[DONE]":
+                        break
+
+                    payload = json.loads(data)
+
+                    if "choices" in payload:
+                        delta = payload["choices"][0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            accumulated_text += content
+                            stage.append_content(content)
+
+        return accumulated_text
