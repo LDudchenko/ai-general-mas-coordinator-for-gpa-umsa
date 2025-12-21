@@ -90,29 +90,6 @@ class MASCoordinator:
             request: Request
     ) -> Message:
 
-        if coordination_request.agent == AgentName.GPA:
-            agent = GPAGateway(self.endpoint, self.deployment_name)
-        elif coordination_request.agent == AgentName.UMS:
-            agent = UMSAgentGateway(self.ums_agent_endpoint)
-        else:
-            raise ValueError(f"Unknown agent: {coordination_request.agent}")
-
-        agent_message = await agent.handle(
-            coordination_request=coordination_request,
-            stage=stage,
-            request=request
-        )
-
-        return agent_message
-
-    async def __handle_coordination_request(
-            self,
-            coordination_request: CoordinationRequest,
-            choice: Choice,
-            stage: Stage,
-            request: Request
-    ) -> Message:
-
         if coordination_request.agent_name == AgentName.GPA:
             agent = GPAGateway(self.endpoint)
 
