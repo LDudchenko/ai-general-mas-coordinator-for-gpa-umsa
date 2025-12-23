@@ -26,19 +26,13 @@ class UMSAgentGateway:
 
         if not conversation_id:
             conversation_id = await self.__create_ums_conversation()
-            choice.set_state({_UMS_CONVERSATION_ID: conversation_id})
+        choice.set_state({_UMS_CONVERSATION_ID: conversation_id})
 
         last_message: Message = request.messages[-1]
         user_content = last_message.content
 
-        if not isinstance(user_content, str):
-            raise ValueError("UMS agent expects text user message")
-
         if additional_instructions:
-            user_content = (
-                f"{user_content}\n\n"
-                f"Additional instructions:\n{additional_instructions}"
-            )
+            user_content = (f"{user_content}\n\nAdditional instructions:\n{additional_instructions}")
 
         result_text = await self.__call_ums_agent(
             conversation_id=conversation_id,
@@ -53,9 +47,9 @@ class UMSAgentGateway:
 
     def __get_ums_conversation_id(self, request: Request) -> Optional[str]:
         for message in request.messages:
-            if message.custom_content and isinstance(message.custom_content, dict):
-                state = message.custom_content.get("state")
-                if state and _UMS_CONVERSATION_ID in state:
+            if message.custom_content and message.custom_content.state:
+                state = message.custom_content.state
+                if _UMS_CONVERSATION_ID in state:
                     return state[_UMS_CONVERSATION_ID]
         return None
 
@@ -81,7 +75,7 @@ class UMSAgentGateway:
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
                     "POST",
-                    f"{self.ums_agent_endpoint}/chat/{conversation_id}",
+                    f"{self.ums_agent_endpoint}/conversations/{conversation_id}/chat",
                     json={
                         "message": {
                             "role": "user",
