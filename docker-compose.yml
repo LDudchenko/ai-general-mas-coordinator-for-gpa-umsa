@@ -70,7 +70,6 @@ services:
       DIAL_URL: "http://core:8080"
       LOG_LEVEL: "INFO"
 
-# TODO: Add UMS related services
   userservice:
     image: khshanovskyi/mockuserservice:latest
     ports:
