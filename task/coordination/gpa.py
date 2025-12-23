@@ -42,7 +42,7 @@ class GPAGateway:
             if delta.custom_content:
 
                 if delta.custom_content.attachments:
-                        result_custom_content.attachments.append(delta.custom_content.attachments)
+                        result_custom_content.attachments.extend(delta.custom_content.attachments)
 
                 if delta.custom_content.state:
                     result_custom_content.state = delta.custom_content.state
@@ -65,17 +65,13 @@ class GPAGateway:
                             mapped_stage = StageProcessor.open_stage(choice, name=stg.get("name"))
                             stages_map[idx] = mapped_stage
 
-        choice.custom_content = CustomContent(
-            attachments=[
-                Attachment(**a.dict(exclude_none=True))
-                for a in result_custom_content.attachments
-            ],
-            state=result_custom_content.state,
-        )
+
+        for attachment in result_custom_content.attachments:
+            choice.add_attachment(Attachment(**attachment.dict(exclude_none=True)))
 
         choice.state = {_IS_GPA: True, _GPA_MESSAGES: result_custom_content.state}
 
-        return Message(role=Role.ASSISTANT, content=content, custom_content=choice.custom_content)
+        return Message(role=Role.ASSISTANT, content=content)
 
 
     def __prepare_gpa_messages(self, request: Request, additional_instructions: Optional[str]) -> list[dict[str, Any]]:
@@ -89,20 +85,21 @@ class GPAGateway:
 
                 if state.get(_IS_GPA):
                     res_messages.append(request.messages[idx - 1].dict(exclude_none=True))
-
                     restored = deepcopy(msg)
                     restored.custom_content.state = state.get(_GPA_MESSAGES, {})
                     res_messages.append(restored.dict(exclude_none=True))
 
+        last_user_msg = request.messages[-1]
+        custom_content = last_user_msg.custom_content
         if additional_instructions:
             last_msg = {
                 "role": Role.USER,
                 "content": additional_instructions,
+                "custom_content": custom_content.dict(exclude_none=True) if custom_content else None,
             }
             res_messages.append(last_msg)
-
-            if res_messages and isinstance(res_messages[-1].get("content"), str):
-                res_messages[-1]["content"] = additional_instructions
+        else:
+            res_messages.append(last_user_msg.dict(exclude_none=True))
 
         return res_messages
 
