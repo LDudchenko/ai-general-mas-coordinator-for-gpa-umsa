@@ -23,7 +23,7 @@ class MASCoordinatorApplication(ChatCompletion):
         # 1. Create single choice with context manager
         # 2. Create MASCoordinator and handle request
         with response.create_single_choice() as choice:
-            logger.debug(f"Created response choice [conversation_id={conversation_id}]")
+            logger.debug(f"Created response choice")
 
             mas_coordinator = MASCoordinator(
                 endpoint=DIAL_ENDPOINT,

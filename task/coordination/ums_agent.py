@@ -62,7 +62,8 @@ class UMSAgentGateway:
     async def __create_ums_conversation(self) -> str:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{self.ums_agent_endpoint}/conversation"
+                f"{self.ums_agent_endpoint}/conversations",
+                json={"title": "UMS Conversation"}
             )
             response.raise_for_status()
             data = response.json()
@@ -89,21 +90,15 @@ class UMSAgentGateway:
                         "stream": True
                     }
             ) as response:
-
                 async for line in response.aiter_lines():
                     if not line:
                         continue
-
                     if not line.startswith("data:"):
                         continue
-
                     data = line.removeprefix("data: ").strip()
-
                     if data == "[DONE]":
                         break
-
                     payload = json.loads(data)
-
                     if "choices" in payload:
                         delta = payload["choices"][0].get("delta", {})
                         content = delta.get("content")

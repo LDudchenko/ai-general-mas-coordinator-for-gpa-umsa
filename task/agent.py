@@ -1,10 +1,8 @@
 import json
-from copy import deepcopy
 from typing import Any
 
 from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import Role, Choice, Request, Message, Stage
-from pydantic import StrictStr
 
 from task.coordination.gpa import GPAGateway
 from task.coordination.ums_agent import UMSAgentGateway
@@ -15,7 +13,6 @@ from task.stage_util import StageProcessor
 
 logger = get_logger(__name__)
 
-
 class MASCoordinator:
 
     def __init__(self, endpoint: str, deployment_name: str, ums_agent_endpoint: str):
@@ -24,12 +21,14 @@ class MASCoordinator:
         self.ums_agent_endpoint = ums_agent_endpoint
 
     async def handle_request(self, choice: Choice, request: Request) -> Message:
-        async_dial = AsyncDial(api_version='2025-01-01-preview')
-        coordination_request = self.__prepare_coordination_request(async_dial, request)
-        stage = StageProcessor.open_stage(choice)
-        stage.append_content(stage)
+        async_dial = AsyncDial(api_version='2025-01-01-preview', base_url=self.endpoint, api_key=request.api_key)
+        coordination_request = await self.__prepare_coordination_request(async_dial, request)
+        stage = StageProcessor.open_stage(choice, name="Coordination Request")
+        stage.append_content(coordination_request.model_dump_json())
         stage.close()
+        stage = StageProcessor.open_stage(choice, name=f"Call {coordination_request.agent_name} agent")
         message = await self.__handle_coordination_request(coordination_request, choice, stage, request)
+        stage.close()
         final_response = await self.__final_response(async_dial, choice, request, message)
         return final_response
 
@@ -43,8 +42,7 @@ class MASCoordinator:
         )
 
         response = await client.chat.completions.create(
-            endpoint=self.endpoint,
-            deployment_id=self.deployment_name,
+            deployment_name=self.deployment_name,
             messages=messages,
             extra_body={
                 "response_format": {
@@ -131,8 +129,7 @@ class MASCoordinator:
         messages[-1]["content"] = augmented_user_prompt
 
         stream = await client.chat.completions.create(
-            endpoint=self.endpoint,
-            deployment_id=self.deployment_name,
+            deployment_name=self.deployment_name,
             messages=messages,
             stream=True
         )
@@ -143,6 +140,6 @@ class MASCoordinator:
             delta = chunk.choices[0].delta.content
             if delta:
                 final_message.content += delta
-                choice.append(delta)
+                choice.append_content(delta)
 
         return final_message

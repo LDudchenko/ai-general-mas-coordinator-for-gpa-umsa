@@ -66,7 +66,60 @@ class GPAGateway:
         # 6. Now we need to to save information about conversation with GPA to the MASCoordinator choice state. Create
         #    dict {_IS_GPA: True, GPA_MESSAGES: result_custom_content.state} and set it to the choice state.
         # 7. Return assistant message with content
-        raise NotImplementedError()
+        async_dial = AsyncDial(api_version="2025-01-01-preview", base_url=self.endpoint, api_key=request.api_key)
+        messages = self.__prepare_gpa_messages(request, additional_instructions)
+        content = ""
+        result_custom_content = CustomContent(attachments=[], state={})
+        stages_map: dict[int, Stage] = {}
+        chunks = await async_dial.chat.completions.create(deployment_name="general-purpose-agent", messages=messages,
+                                                       stream=True, extra_headers={
+                "x-conversation-id": request.headers.get("x-conversation-id")}, )
+        async for chunk in chunks:
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                print(delta.content, end="", flush=True)
+                content += delta.content
+                stage.append_content(delta.content)
+
+            if delta.custom_content:
+
+                if delta.custom_content.attachments:
+                        result_custom_content.attachments.append(delta.custom_content.attachments)
+
+                if delta.custom_content.state:
+                    result_custom_content.state = delta.custom_content.state
+
+                custom_content_dict = delta.custom_content.dict(exclude_none=True)
+                if "stages" in custom_content_dict:
+                    for stg in custom_content_dict["stages"]:
+                        idx = stg["index"]
+
+                        if idx in stages_map:
+                            mapped_stage = stages_map[idx]
+                            if stg.get("content"):
+                                mapped_stage.append_content(stg["content"])
+                            if stg.get("attachments"):
+                                for att in stg["attachments"]:
+                                    mapped_stage.add_attachment(Attachment(**att))
+                            if stg.get("status") == "completed":
+                                StageProcessor.close_stage_safely(mapped_stage)
+                        else:
+                            mapped_stage = StageProcessor.open_stage(choice, name=stg.get("name"))
+                            stages_map[idx] = mapped_stage
+
+        choice.custom_content = CustomContent(
+            attachments=[
+                Attachment(**a.dict(exclude_none=True))
+                for a in result_custom_content.attachments
+            ],
+            state=result_custom_content.state,
+        )
+
+        choice.state = {_IS_GPA: True, _GPA_MESSAGES: result_custom_content.state}
+
+        return Message(role=Role.ASSISTANT, content=content, custom_content=choice.custom_content)
+
 
     def __prepare_gpa_messages(self, request: Request, additional_instructions: Optional[str]) -> list[dict[str, Any]]:
         #TODO:
@@ -83,4 +136,30 @@ class GPAGateway:
         # 3. Add last message from `additional_instructions` (it will be user message) as dict with none excluded
         # 4. If `additional_instructions` are present we need to make augmentation for last message content in the `res_messages`
         # 5. Return `res_messages`
-        raise NotImplementedError()
+        res_messages: list[dict[str, Any]] = []
+
+        for idx in range(len(request.messages)):
+            msg = request.messages[idx]
+
+            if msg.role == Role.ASSISTANT and msg.custom_content and msg.custom_content.state:
+                state = msg.custom_content.state
+
+                if state.get(_IS_GPA):
+                    res_messages.append(request.messages[idx - 1].dict(exclude_none=True))
+
+                    restored = deepcopy(msg)
+                    restored.custom_content.state = state.get(_GPA_MESSAGES, {})
+                    res_messages.append(restored.dict(exclude_none=True))
+
+        if additional_instructions:
+            last_msg = {
+                "role": Role.USER,
+                "content": additional_instructions,
+            }
+            res_messages.append(last_msg)
+
+            if res_messages and isinstance(res_messages[-1].get("content"), str):
+                res_messages[-1]["content"] = additional_instructions
+
+        return res_messages
+
